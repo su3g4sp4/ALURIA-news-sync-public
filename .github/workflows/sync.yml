@@ -14,6 +14,7 @@ on:
 permissions:
   contents: read
   issues: write
+  actions: write
 
 concurrency:
   group: tibo-sync
@@ -152,3 +153,20 @@ jobs:
               if (Date.now() - last > 6 * 3600 * 1000) await github.rest.issues.createComment({ ...context.repo, issue_number: data[0].number, body });
             }
             else await github.rest.issues.create({ ...context.repo, title: "Tibo 同步失敗", labels: ["tibo-sync-failure"], body });
+
+  # 接力：GitHub 的定時觸發在新倉庫可能很久都不啟動，所以由手動／接力觸發的那一輪，
+  # 在開始後約 28 分鐘自己叫下一輪（只接力 workflow_dispatch，定時那一輪不另開一條接力線）。
+  next:
+    needs: [gate, sync]
+    if: always() && github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env: { GH_TOKEN: "${{ github.token }}" }
+    steps:
+      - name: Wait until about 28 minutes after this run started, then start the next run
+        run: |
+          started=$(date -d "$(gh run view ${{ github.run_id }} -R ${{ github.repository }} --json createdAt --jq .createdAt)" +%s)
+          wait=$(( started + 1680 - $(date +%s) ))
+          [ "$wait" -gt 0 ] && sleep "$wait"
+          gh workflow run sync.yml -R ${{ github.repository }} --ref main
+
