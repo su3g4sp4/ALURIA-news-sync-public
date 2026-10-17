@@ -1,0 +1,149 @@
+# AI熱點 自家新聞產線（一次性批次）：從各信源自己的 RSS 採集 → 取正文 → Gemini 判讀、寫繁中標題摘要 → 同事件歸併 → 事件綜述、熱度。
+# 程式在私人倉庫 su3g4sp4/aluria（apps/worker/src/batch.ts），這裡只負責定時把它跑一次；公開倉庫的執行分鐘數免費。
+# 只補網站缺的功能（標籤、一手、另有 N 家、主題、事件進展、搜尋、更早的動態）；鏡像、熱榜、日週月報不受影響。
+# 每 10 分鐘醒來一次（錯開 sync.yml），距離上次成功不到 25 分鐘就結束；手動或接力啟動的執行會在開始後約 28 分鐘接力下一次。
+# 紀錄是公開的：程式只印數量和狀態，連線字串在用之前先遮掉，金鑰只放在 Actions secrets。
+name: AI熱點 pipeline
+
+on:
+  schedule:
+    - cron: "5-59/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  actions: write
+
+concurrency:
+  group: aluria-pipeline
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      run: ${{ steps.age.outputs.run }}
+    steps:
+      - name: Skip when the last successful batch is under 25 minutes old (scheduled runs only)
+        id: age
+        env: { DATABASE_URL: "${{ secrets.DATABASE_URL }}" }
+        run: |
+          age=$(psql "$DATABASE_URL" -Atqc "SELECT EXTRACT(EPOCH FROM now() - max(finished_at))::int FROM job_runs WHERE job = 'pipeline.batch' AND status = 'ok'" 2>/dev/null || true)
+          [ -n "$age" ] || age=99999
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$age" -lt 1500 ]; then echo "last batch ${age}s ago; skip"; echo "run=no" >> "$GITHUB_OUTPUT"; else echo "run=yes" >> "$GITHUB_OUTPUT"; fi
+
+  pipeline:
+    needs: gate
+    if: needs.gate.outputs.run == 'yes'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out the site code (private repo, read-only deploy key)
+        uses: actions/checkout@v4
+        with:
+          repository: su3g4sp4/aluria
+          ssh-key: ${{ secrets.ALURIA_DEPLOY_KEY }}
+          # 暫時：先跑 own-pipeline 分支；合併進 main 之後改成 main（或拿掉這行）。
+          ref: own-pipeline
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - name: Install
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Database address for long work (Neon direct, not the pooler; masked in the log)
+        env: { DATABASE_URL: "${{ secrets.DATABASE_URL }}" }
+        run: |
+          direct="${DATABASE_URL/-pooler/}"
+          echo "::add-mask::$direct"
+          echo "PIPELINE_DATABASE_URL=$direct" >> "$GITHUB_ENV"
+      - name: Pick the model (Gemini Flash-Lite, a different one from the rewrite step when available)
+        env:
+          GEMINI_API_KEY: "${{ secrets.GEMINI_API_KEY }}"
+          WANT: "${{ vars.PIPELINE_LLM_MODEL }}"
+        run: |
+          have=$(curl -fsS --max-time 20 -H "x-goog-api-key: $GEMINI_API_KEY" "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000" | jq -r '.models[].name' | sed 's#^models/##' || true)
+          model=""
+          for m in $WANT gemini-2.5-flash-lite gemini-2.0-flash-lite gemini-3.1-flash-lite; do
+            if printf '%s\n' "$have" | grep -qx "$m"; then model="$m"; break; fi
+          done
+          [ -n "$model" ] || model="${WANT:-gemini-2.5-flash-lite}"
+          echo "model: $model"
+          echo "PIPELINE_LLM_MODEL=$model" >> "$GITHUB_ENV"
+      - name: Database migrations (idempotent; only missing ones apply)
+        id: migrate
+        continue-on-error: true
+        run: DATABASE_URL="$PIPELINE_DATABASE_URL" node scripts/migrate.ts
+      - name: Run one batch
+        env:
+          COLLECT_ENABLED: "true"
+          MODEL_CALLS_ENABLED: "true"
+          LLM_BASE_URL: "https://generativelanguage.googleapis.com/v1beta/openai"
+          LLM_API_KEY: "${{ secrets.GEMINI_API_KEY }}"
+          LLM_JSON_MODE: "false"
+          # 每分鐘／每小時／每天的模型呼叫上限（免費額度內；改這裡下一次就生效）。
+          LLM_BUDGET: "12/150/600"
+          BATCH_MAX_MINUTES: "17"
+          DATABASE_POOL_MAX: "6"
+        run: DATABASE_URL="$PIPELINE_DATABASE_URL" LLM_MODEL="$PIPELINE_LLM_MODEL" node apps/worker/src/batch.ts
+      - name: Database size (opens an issue above 400 MB)
+        if: always()
+        id: size
+        run: |
+          bytes=$(psql "$PIPELINE_DATABASE_URL" -Atqc "SELECT pg_database_size(current_database())" 2>/dev/null || echo 0)
+          echo "database: $((bytes / 1048576)) MB"
+          echo "mb=$((bytes / 1048576))" >> "$GITHUB_OUTPUT"
+      - name: Storage warning
+        if: always() && steps.size.outputs.mb != '' && fromJSON(steps.size.outputs.mb) > 400
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const mb = Number("${{ steps.size.outputs.mb }}");
+            const { data } = await github.rest.issues.listForRepo({ ...context.repo, state: "open", labels: "pipeline-storage" });
+            const body = `Neon 資料庫目前約 ${mb} MB（免費上限 512 MB）。自家產線每天會清理舊資料；若持續上升，要調整保留天數或信源數量。`;
+            if (!data.length) await github.rest.issues.create({ ...context.repo, title: "資料庫快滿了", labels: ["pipeline-storage"], body });
+      - name: Keep scheduled workflows enabled (GitHub turns schedules off after 60 quiet days)
+        if: always()
+        continue-on-error: true
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          [ "$(date -u +%d)" = "01" ] || [ "$(date -u +%d)" = "15" ] || exit 0
+          for w in pipeline.yml sync.yml; do gh api -X PUT "repos/${{ github.repository }}/actions/workflows/$w/enable" || true; done
+      - name: Notify failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const { data } = await github.rest.issues.listForRepo({ ...context.repo, state: "open", labels: "pipeline-failure" });
+            const body = `自家產線這一輪失敗，網站照常顯示鏡像資料，下一輪會再試。\n\n執行紀錄：${run}\n時間：${new Date().toISOString()}`;
+            if (data.length) {
+              const last = new Date(data[0].updated_at).getTime();
+              if (Date.now() - last > 6 * 3600 * 1000) await github.rest.issues.createComment({ ...context.repo, issue_number: data[0].number, body });
+            }
+            else await github.rest.issues.create({ ...context.repo, title: "自家產線執行失敗", labels: ["pipeline-failure"], body });
+      - name: Close failure issue on recovery
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data } = await github.rest.issues.listForRepo({ ...context.repo, state: "open", labels: "pipeline-failure" });
+            for (const i of data) await github.rest.issues.update({ ...context.repo, issue_number: i.number, state: "closed", state_reason: "completed" });
+
+  # 接力：排程在這個新倉庫不可靠，所以手動或接力啟動的執行，會在開始後約 28 分鐘再啟動下一次（排程與 gate 仍保留當備援）。
+  next:
+    needs: [gate, pipeline]
+    if: always() && github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env: { GH_TOKEN: "${{ github.token }}" }
+    steps:
+      - name: Wait until about 28 minutes after this run started, then start the next run
+        run: |
+          started=$(date -d "$(gh run view ${{ github.run_id }} -R ${{ github.repository }} --json createdAt --jq .createdAt)" +%s)
+          wait=$(( started + 1680 - $(date +%s) ))
+          [ "$wait" -gt 0 ] && sleep "$wait"
+          gh workflow run pipeline.yml -R ${{ github.repository }} --ref main
