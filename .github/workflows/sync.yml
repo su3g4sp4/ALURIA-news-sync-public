@@ -1,0 +1,154 @@
+# AI熱點 的資料同步（從私人倉庫 su3g4sp4/aluria 搬來；公開倉庫的 Actions 分鐘數免費）。
+# 每 10 分鐘醒來一次，距離上次成功同步不到 25 分鐘就直接結束，所以實際大約每 30 分鐘同步一次，
+# 不怕 GitHub 排程延遲。金鑰都放在本倉庫的 Actions secrets，程式和紀錄裡沒有任何金鑰。
+# Tibo 重置監控 + AIHOT 精選／全部／熱榜／日週月報／模型榜鏡像 + Gemini 改寫（去 AI 味規則見 site/style/rewrite-guide.md），寫入 Neon。
+# 失敗時不覆蓋 → 網站沿用上一份好的資料，並開一張 issue；恢復後自動關閉。
+name: AI熱點 sync
+
+# 2026-10-18 起定時執行搬到公開倉庫 su3g4sp4/ALURIA-news-sync-public（公開倉庫的執行分鐘數免費）；這裡只留手動執行備用。
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: tibo-sync
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      run: ${{ steps.age.outputs.run }}
+    steps:
+      - name: Skip when the last successful sync is under 25 minutes old (scheduled runs only)
+        id: age
+        env: { DATABASE_URL: "${{ secrets.DATABASE_URL }}" }
+        run: |
+          age=$(psql "$DATABASE_URL" -Atqc "SELECT EXTRACT(EPOCH FROM now() - updated_at)::int FROM aihot_mirror WHERE key = 'sync-ran'" 2>/dev/null || true)
+          [ -n "$age" ] || age=99999
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$age" -lt 1500 ]; then echo "last sync ${age}s ago; skip"; echo "run=no" >> "$GITHUB_OUTPUT"; else echo "run=yes" >> "$GITHUB_OUTPUT"; fi
+
+  sync:
+    needs: gate
+    if: needs.gate.outputs.run == 'yes'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            scripts
+            site/style
+      - name: Fetch last good snapshot (Neon)
+        env: { DATABASE_URL: "${{ secrets.DATABASE_URL }}" }
+        run: |
+          mkdir -p data/tibo
+          psql "$DATABASE_URL" -Atqc "SELECT data::text FROM tibo_snapshot WHERE id = 1" > data/tibo/aihot-snapshot.json || true
+          [ -s data/tibo/aihot-snapshot.json ] || rm -f data/tibo/aihot-snapshot.json
+          cp data/tibo/aihot-snapshot.json /tmp/prev.json 2>/dev/null || true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: scripts/requirements-tibo.txt
+      - run: pip install --quiet --disable-pip-version-check -r scripts/requirements-tibo.txt
+      - name: Sync from AIHOT public API
+        id: sync
+        run: python3 scripts/fetch-aihot-tibo.py
+      - name: Save to Neon (only after a successful sync)
+        if: success()
+        env: { DATABASE_URL: "${{ secrets.DATABASE_URL }}" }
+        run: |
+          if cmp -s data/tibo/aihot-snapshot.json /tmp/prev.json; then echo "unchanged"; exit 0; fi
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q <<'SQL'
+          \set snap `cat data/tibo/aihot-snapshot.json`
+          INSERT INTO tibo_snapshot (id, data, updated_at) VALUES (1, :'snap'::jsonb, now())
+          ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = now();
+          SQL
+      - name: Tibo reset alerts (Telegram / LINE; deduped by event id in Neon)
+        if: success()
+        continue-on-error: true
+        timeout-minutes: 1
+        env: { CRON_SECRET: "${{ secrets.CRON_SECRET }}" }
+        run: |
+          [ -n "$CRON_SECRET" ] || { echo "CRON_SECRET not set; skip"; exit 0; }
+          curl -fsS --max-time 45 -H "Authorization: Bearer $CRON_SECRET" https://aluria-api.vercel.app/api/telegram/cron/tibo || echo "tibo alert call failed"
+      - name: Sync AIHOT news / hot / reports (mirror)
+        id: mirror
+        if: always() && steps.sync.outcome != 'skipped'
+        continue-on-error: true
+        env: { DATABASE_URL: "${{ secrets.DATABASE_URL }}" }
+        run: |
+          # 模型詳情只在上游發布新一輪時才抓：先讀上次存的 run id。
+          export LB_PREV_RUN=$(psql "$DATABASE_URL" -Atqc "SELECT data->>'version' FROM aihot_mirror WHERE key = 'lb-meta'" 2>/dev/null || true)
+          # 已存的鍵（全部動態按日、歷史報告逐期）：只補抓缺的。
+          export MIRROR_HAVE=$(psql "$DATABASE_URL" -Atqc "SELECT string_agg(key, ',') FROM aihot_mirror WHERE key ~ '^(all|daily|weekly|monthly)-[0-9]'" 2>/dev/null || true)
+          python3 scripts/fetch-aihot-mirror.py
+      - name: Rewrite new titles/summaries (Gemini free tier; cached by id+hash; falls back to original)
+        if: always() && steps.mirror.outcome != 'skipped'
+        timeout-minutes: 3
+        continue-on-error: true
+        env:
+          DATABASE_URL: "${{ secrets.DATABASE_URL }}"
+          GEMINI_API_KEY: "${{ secrets.GEMINI_API_KEY }}"
+        run: |
+          psql "$DATABASE_URL" -Atqc "SELECT data::text FROM aihot_mirror WHERE key = 'rewrites'" > /tmp/rewrites-prev.json || true
+          python3 scripts/rewrite-aihot.py
+      - name: Save mirror to Neon (only keys fetched OK; others keep last good)
+        if: always() && steps.mirror.outcome != 'skipped'
+        env: { DATABASE_URL: "${{ secrets.DATABASE_URL }}" }
+        run: |
+          [ -d data/mirror ] || exit 0
+          # 一個連線寫完所有鍵；內容沒變的不更新。
+          {
+            echo "BEGIN;"
+            echo "CREATE TABLE IF NOT EXISTS aihot_mirror (key text PRIMARY KEY, data jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now());"
+            for f in data/mirror/*.json; do
+              k=$(basename "$f" .json)
+              echo "\\set d \`cat $f\`"
+              echo "INSERT INTO aihot_mirror (key, data, updated_at) VALUES ('$k', :'d'::jsonb, now()) ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data, updated_at = now() WHERE aihot_mirror.data IS DISTINCT FROM EXCLUDED.data;"
+            done
+            # 全部動態只留 14 天（Neon 免費額度）。
+            echo "DELETE FROM aihot_mirror WHERE key ~ '^all-[0-9]{4}-' AND key < 'all-' || to_char(now() AT TIME ZONE 'Asia/Taipei' - interval '14 days', 'YYYY-MM-DD');"
+            # 給 gate 判斷「上次成功同步多久了」。
+            echo "INSERT INTO aihot_mirror (key, data, updated_at) VALUES ('sync-ran', jsonb_build_object('at', now()), now()) ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data, updated_at = now();"
+            echo "COMMIT;"
+          } > /tmp/mirror.sql
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f /tmp/mirror.sql
+      - name: Check model board snapshot is consistent (all boards + every model page, one version and one sync time)
+        if: always() && steps.mirror.outcome != 'skipped'
+        env: { DATABASE_URL: "${{ secrets.DATABASE_URL }}" }
+        run: |
+          psql "$DATABASE_URL" -Atqc "SELECT key, data::text FROM aihot_mirror WHERE key LIKE 'lb-%'" -F $'\t' > /tmp/lb-rows.tsv
+          python3 -m unittest scripts/test_check_lb_snapshot.py
+          python3 scripts/check-lb-snapshot.py --rows /tmp/lb-rows.tsv
+      - name: Fail if any mirror key failed (opens the failure issue)
+        if: steps.mirror.outcome == 'failure'
+        run: exit 1
+      - name: Close failure issue on recovery
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data } = await github.rest.issues.listForRepo({ ...context.repo, state: "open", labels: "tibo-sync-failure" });
+            for (const i of data) await github.rest.issues.update({ ...context.repo, issue_number: i.number, state: "closed", state_reason: "completed" });
+      - name: Notify failure (keep last good snapshot)
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const { data } = await github.rest.issues.listForRepo({ ...context.repo, state: "open", labels: "tibo-sync-failure" });
+            const body = `同步失敗（Tibo 或 AIHOT 鏡像），網站沿用上一份好的資料。\n\n執行紀錄：${run}\n時間：${new Date().toISOString()}`;
+            if (data.length) {
+              // 降噪：同一張 issue 最多每 6 小時留言一次。
+              const last = new Date(data[0].updated_at).getTime();
+              if (Date.now() - last > 6 * 3600 * 1000) await github.rest.issues.createComment({ ...context.repo, issue_number: data[0].number, body });
+            }
+            else await github.rest.issues.create({ ...context.repo, title: "Tibo 同步失敗", labels: ["tibo-sync-failure"], body });
