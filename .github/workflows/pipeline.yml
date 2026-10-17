@@ -19,6 +19,12 @@ concurrency:
   group: aluria-pipeline
   cancel-in-progress: false
 
+env:
+  # 要跑的私人倉庫分支。網站正式版（main）還沒有「鏡像優先」的保護之前，產線寫進資料庫的東西會改到網站現有的
+  # 關於頁數字、開放 API 和 RSS，所以這裡不是 main 時產線暫停（也不接力），並把信源先停用、記下來；
+  # 合併進 main、把這行改成 main 之後，第一次執行就會把那些信源重新打開，照常跑。
+  PIPELINE_REF: own-pipeline
+
 jobs:
   gate:
     runs-on: ubuntu-latest
@@ -30,6 +36,16 @@ jobs:
         id: age
         env: { DATABASE_URL: "${{ secrets.DATABASE_URL }}" }
         run: |
+          if [ "$PIPELINE_REF" != "main" ]; then
+            echo "paused until the site's main branch carries the pipeline (PIPELINE_REF=$PIPELINE_REF)"
+            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atq >/dev/null 2>&1 <<'SQL' || echo "pause bookkeeping skipped"
+          WITH d AS (UPDATE sources SET enabled = false, updated_at = now() WHERE enabled RETURNING id)
+          INSERT INTO settings (key, value, updated_by)
+          SELECT 'pipeline.paused-sources', coalesce(jsonb_agg(id), '[]'::jsonb), 'pipeline' FROM d
+          ON CONFLICT (key) DO UPDATE SET value = (SELECT coalesce(jsonb_agg(DISTINCT x), '[]'::jsonb) FROM jsonb_array_elements(settings.value || EXCLUDED.value) x), updated_at = now();
+          SQL
+            echo "run=no" >> "$GITHUB_OUTPUT"; exit 0
+          fi
           age=$(psql "$DATABASE_URL" -Atqc "SELECT EXTRACT(EPOCH FROM now() - max(finished_at))::int FROM job_runs WHERE job = 'pipeline.batch' AND status = 'ok'" 2>/dev/null || true)
           [ -n "$age" ] || age=99999
           if [ "${{ github.event_name }}" = "schedule" ] && [ "$age" -lt 1500 ]; then echo "last batch ${age}s ago; skip"; echo "run=no" >> "$GITHUB_OUTPUT"; else echo "run=yes" >> "$GITHUB_OUTPUT"; fi
@@ -45,8 +61,7 @@ jobs:
         with:
           repository: su3g4sp4/aluria
           ssh-key: ${{ secrets.ALURIA_DEPLOY_KEY }}
-          # 暫時：先跑 own-pipeline 分支；合併進 main 之後改成 main（或拿掉這行）。
-          ref: own-pipeline
+          ref: ${{ env.PIPELINE_REF }}
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -143,7 +158,7 @@ jobs:
   # 接力：排程在這個新倉庫不可靠，所以手動或接力啟動的執行，會在開始後約 28 分鐘再啟動下一次（排程與 gate 仍保留當備援）。
   next:
     needs: [gate, pipeline]
-    if: always() && github.event_name == 'workflow_dispatch'
+    if: always() && github.event_name == 'workflow_dispatch' && needs.gate.outputs.run == 'yes'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env: { GH_TOKEN: "${{ github.token }}" }
