@@ -65,12 +65,19 @@ jobs:
           GEMINI_API_KEY: "${{ secrets.GEMINI_API_KEY }}"
           WANT: "${{ vars.PIPELINE_LLM_MODEL }}"
         run: |
-          have=$(curl -fsS --max-time 20 -H "x-goog-api-key: $GEMINI_API_KEY" "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000" | jq -r '.models[].name' | sed 's#^models/##' || true)
+          # 列表裡有的不一定能用（舊型號會回「不再開放給新使用者」），所以每個候選都先實際呼叫一次（只要 1 個字）。
+          # 順序：指定的 → 列表裡其他 Flash-Lite（新的在前）→ 改寫步驟用的 gemini-3.1-flash-lite（共用額度，放最後）。
+          have=$(curl -fsS --max-time 20 -H "x-goog-api-key: $GEMINI_API_KEY" "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000" | jq -r '.models[].name' | sed 's#^models/##' | grep -E '^gemini-[0-9.]+-flash-lite$' | sort -rV || true)
+          echo "flash-lite models listed: $(echo $have)"
           model=""
-          for m in $WANT gemini-2.5-flash-lite gemini-2.0-flash-lite gemini-3.1-flash-lite; do
-            if printf '%s\n' "$have" | grep -qx "$m"; then model="$m"; break; fi
+          for m in $WANT $(printf '%s\n' $have | grep -vx 'gemini-3.1-flash-lite') gemini-3.1-flash-lite; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 -H "x-goog-api-key: $GEMINI_API_KEY" -H 'content-type: application/json' \
+              -d '{"contents":[{"parts":[{"text":"ok"}]}],"generationConfig":{"maxOutputTokens":1}}' \
+              "https://generativelanguage.googleapis.com/v1beta/models/$m:generateContent" || true)
+            echo "probe $m: HTTP $code"
+            if [ "$code" = "200" ]; then model="$m"; break; fi
           done
-          [ -n "$model" ] || model="${WANT:-gemini-2.5-flash-lite}"
+          [ -n "$model" ] || model="${WANT:-gemini-3.1-flash-lite}"
           echo "model: $model"
           echo "PIPELINE_LLM_MODEL=$model" >> "$GITHUB_ENV"
       - name: Database migrations (idempotent; only missing ones apply)
