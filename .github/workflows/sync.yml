@@ -80,6 +80,13 @@ jobs:
         run: |
           [ -n "$CRON_SECRET" ] || { echo "CRON_SECRET not set; skip"; exit 0; }
           curl -fsS --max-time 45 -H "Authorization: Bearer $CRON_SECRET" https://aluria-api.vercel.app/api/telegram/cron/tibo || echo "tibo alert call failed"
+      - name: Telegram idle-group nudge (no-op outside daytime or when the group is active)
+        if: always()
+        continue-on-error: true
+        env: { CRON_SECRET: "${{ secrets.CRON_SECRET }}" }
+        run: |
+          [ -n "$CRON_SECRET" ] || { echo "CRON_SECRET not set; skip"; exit 0; }
+          curl -fsS --max-time 45 -H "Authorization: Bearer $CRON_SECRET" https://aluria-api.vercel.app/api/telegram/cron/nudge || echo "nudge call failed"
       - name: Sync AIHOT news / hot / reports (mirror)
         id: mirror
         if: always() && steps.sync.outcome != 'skipped'
