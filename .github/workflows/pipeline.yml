@@ -23,7 +23,7 @@ env:
   # 要跑的私人倉庫分支。網站正式版（main）還沒有「鏡像優先」的保護之前，產線寫進資料庫的東西會改到網站現有的
   # 關於頁數字、開放 API 和 RSS，所以這裡不是 main 時產線暫停（也不接力），並把信源先停用、記下來；
   # 合併進 main、把這行改成 main 之後，第一次執行就會把那些信源重新打開，照常跑。
-  PIPELINE_REF: paused-billing
+  PIPELINE_REF: main
 
 jobs:
   gate:
