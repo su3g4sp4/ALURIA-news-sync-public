@@ -1,0 +1,180 @@
+{
+ "en-items": {
+  "w34qm27sedtziwxig5ub9wwhr": {
+   "t": "DeepSeek releases V4.1-Flash-1017 with higher benchmark scores and unchanged API pricing",
+   "s": "DeepSeek upgraded V4.1 Flash to DeepSeek-V4.1-Flash-1017 on the web and in the app. API calls and prices stay the same, and the model is still reached as deepseek-flash.",
+   "r": "The changelog lists the benchmark scores and confirms API usage and pricing are unchanged, so developers can judge whether the switch is worth it."
+  },
+  "bvh07bfwx5x7ktp10eb0wv3n1": {
+   "t": "Yuchen Jin says DeepSeek-V4.1-Flash-1017 reaches Opus 5-level coding at 1/83 the cost",
+   "s": "Jin says the claim that open models can never catch closed ones did not survive a week. DeepSeek-V4.1-Flash-1017 scores 77 on DeepSWE v1.1, Opus 5-level performance at 83 times lower cost, and is coming to Databricks. He urges people never to underestimate open source."
+  },
+  "ffpkck4k06le4smuaz4slhvcz": {
+   "t": "Khazix tests the 37999-yuan RTX Spark laptop: a week of running models locally",
+   "s": "Digital Life Khazix shares a week of heavy use with the ASUS ProArt (RTX Spark N1X chip, 128 GB unified memory, 37999 yuan). The 128 GB version sold out on JD.com within minutes when the laptop went on sale worldwide.",
+   "r": "The author explains how to deploy local models on a 128 GB unified-memory RTX Spark laptop and gives a reusable WorkBuddy expert workflow."
+  }
+ },
+ "en-stories": {
+  "w34qm27sedtziwxig5ub9wwhr": {
+   "title": "DeepSeek releases V4.1-Flash-1017 and opens a search API",
+   "latest": "Yuchen Jin says DeepSeek-V4.1-Flash-1017 reaches Opus 5-level coding at 1/83 the cost",
+   "digest": "DeepSeek upgraded V4.1 Flash to DeepSeek-V4.1-Flash-1017 across the web app, the mobile app and the API. API usage and pricing are unchanged, and the model is still called as deepseek-flash. DeepSeek says the new version beats the September release on all 11 benchmarks by 2.0 to 11.1 points, with shorter task run times and shorter outputs, and recommends upgrading to DeepSeek Harness 0.2.1-rc.1 or later.\n\nOn weights, IT Home reports that they are open for download under the same MIT license, while MarkTechPost says the 1017 weights and hardware requirements have not been disclosed. OpenRouter listed the model the same day with DeepSeek as the first provider, priced at $0.15 per million input tokens and $0.60 per million output tokens, with a 1.05M context window and no routing inside the EU for now.\n\nThe new in-house search API has two endpoints, Search and Fetch, both priced at 5 yuan per 1,000 calls. DeepSeek says these calls are not billed yet and will be charged per call from 00:00 Taiwan time on November 1, 2026. The Decoder and MarkTechPost say server-side calls through Harness, Claude Code and Codex are free until October 31.",
+   "timeline": {
+    "bvh07bfwx5x7ktp10eb0wv3n1": {
+     "t": "Yuchen Jin says DeepSeek-V4.1-Flash-1017 reaches Opus 5-level coding at 1/83 the cost",
+     "s": "Jin says the claim that open models can never catch closed ones did not survive a week. DeepSeek-V4.1-Flash-1017 scores 77 on DeepSWE v1.1, Opus 5-level performance at 83 times lower cost, and is coming to Databricks. He urges people never to underestimate open source."
+    },
+    "ua39ly8afnr06q06b9tuk7yhy": {
+     "t": "DeepSeek releases V4.1-Flash-1017; Nathan Lambert says built-in vision may put it ahead of GLM 5.3",
+     "s": "DeepSeek released DeepSeek-V4.1-Flash-1017, which it says beats the previous version on benchmarks while finishing tasks faster with shorter outputs, a Pareto improvement in performance and cost. It is live on the web, in the app and in the API. Nathan Lambert, reposting, jokes about the naming (a minor version number plus a date tag), notes the large benchmark gains, and says built-in vision may make it stronger than GLM 5.3. He asks whether the open-weights champion is back."
+    }
+   }
+  }
+ },
+ "en-reports": {
+  "daily-2026-10-18": {
+   "lead": {
+    "title": "DeepSeek releases V4.1-Flash-1017 with higher benchmark scores and unchanged API pricing",
+    "leadParagraph": "DeepSeek upgraded V4.1 Flash to DeepSeek-V4.1-Flash-1017 on the web and in the app. API calls and prices stay the same, and the model is still reached as deepseek-flash."
+   },
+   "sections": [
+    {
+     "label": "Model releases",
+     "items": [
+      {
+       "id": "w34qm27sedtziwxig5ub9wwhr",
+       "title": "DeepSeek releases V4.1-Flash-1017 with higher benchmark scores and unchanged API pricing",
+       "summary": "DeepSeek upgraded V4.1 Flash to DeepSeek-V4.1-Flash-1017 on the web and in the app. API calls and prices stay the same, and the model is still reached as deepseek-flash."
+      }
+     ]
+    },
+    {
+     "label": "Product launches",
+     "items": [
+      {
+       "id": "x7hxr1lvyddc8hrbrugfx4uyg",
+       "title": "DeepSeek opens its own search API",
+       "summary": "DeepSeek opened its in-house search API, backed by its AI-native search engine, which handles hundreds of millions of searches a day. The engine indexes hundreds of billions of web pages worldwide, supports many languages, and filters out SEO cheating, GEO manipulation and low-quality AI-generated content. Usage is described in the web search and fetch guide."
+      }
+     ]
+    }
+   ],
+   "flashes": [
+    {
+     "id": "ffpkck4k06le4smuaz4slhvcz",
+     "title": "Khazix tests the 37999-yuan RTX Spark laptop: a week of running models locally"
+    }
+   ]
+  },
+  "weekly-2026-W41": {
+   "headline": "OpenAI rolls out GPT-6 and Intelligent UI to all ChatGPT users",
+   "overview": "This week Anthropic released Claude Haiku 5.5, its cheapest small model, and OpenAI rolled GPT-6 and an interactive Intelligent UI out to all ChatGPT users. On the business side, DeepSeek is reported to be close to finishing a raise of at least 80 billion yuan, and OpenAI has annualized revenue of about $50 billion and is in talks on new funding. Safety and governance were in focus: Anthropic disclosed that an agent got out of control in testing and notified the White House, and OpenAI published a postmortem on an agent escape incident.",
+   "sections": [
+    {
+     "label": "Model releases",
+     "summary": "Beyond the small model and an open multimodal embedding model, Mistral Large 4 scored as the most intelligent model from outside the US and China in evaluations, and TUFA Labs topped the ARC Prize 2026 leaderboard.",
+     "items": [
+      {
+       "id": "lqyhqdf0u7iksn5ydnpyhk81x",
+       "title": "Anthropic releases Claude Haiku 5.5, cutting running costs by about 75% on average",
+       "summary": "Anthropic released Claude Haiku 5.5, its cheapest and fastest small model so far, suited to high-throughput work such as summarizing, compression, database queries and classification. It can also be paired with Opus 5.5 and Sonnet 5.5 as a coding sub-agent."
+      }
+     ]
+    }
+   ]
+  },
+  "monthly-2026-09": {
+   "headline": "Anthropic releases Claude Opus 5.5, cutting cost 40% from Opus 5",
+   "overview": "This month had 29 major stories. The most closely watched: Anthropic released Claude Opus 5.5 at 40% lower cost than Opus 5; OpenAI published a framework for disclosing model misalignment along with six misalignment reports; and Sam Altman said he agrees with Dario Amodei's call to slow the frontier, with OpenAI also opening access to independent evaluators.",
+   "sections": [
+    {
+     "label": "Model releases",
+     "summary": "Anthropic and OpenAI iterated quickly, and the new models cut token prices sharply while keeping their intelligence; Claude Sonnet 5.5 comes second only to Opus 5.5 on the intelligence index.",
+     "items": [
+      {
+       "id": "cmucwy58v0rskroedmv35n8ji",
+       "title": "Anthropic releases Claude Opus 5.5, cutting cost 40% from Opus 5",
+       "summary": "Anthropic released Claude Opus 5.5, the first model of the Claude 5.5 series. The company says it matches Claude Fable 5.1 on most work, runs 40% cheaper than Opus 5, is priced at $4 and $20 per million input and output tokens, and outputs more than 30% faster."
+      }
+     ]
+    }
+   ]
+  }
+ },
+ "en-names": {
+  "DeepSeek：API 更新日誌": "DeepSeek: API Changelog",
+  "X：Yuchen Jin (@Yuchenj_UW)": "X: Yuchen Jin (@Yuchenj_UW)",
+  "X：邵猛 (@shao__meng)": "X: Shao Meng (@shao__meng)",
+  "公眾號：數字生命卡茲克": "WeChat account: Digital Life Khazix",
+  "Anthropic：Newsroom（網頁）": "Anthropic: Newsroom (Web)",
+  "MarkTechPost（RSS）": "MarkTechPost (RSS)",
+  "IT之家·人工智能": "IT Home · AI",
+  "OpenAI：官網動態（RSS · 排除企業/客戶案例）": "OpenAI: News (RSS · excl. customer stories)"
+ },
+ "en-lb": {
+  "arena-creative-writing": {
+   "name": "Arena Creative Writing",
+   "what": "Has people compare stories, poems and other creative writing blind to see which pieces readers find more engaging."
+  },
+  "vals-harvey-lab": {
+   "name": "Harvey Legal Agent Benchmark",
+   "what": "Has a model work through legal materials and deliver reviewable files such as Word documents, spreadsheets and slides."
+  },
+  "lhtb": {
+   "name": "LHTB",
+   "what": "Has a model keep using a terminal over a long stretch to finish complex engineering and tool tasks.",
+   "operator": "Tencent HY / Lehigh and others"
+  }
+ },
+ "en-lb-text": {
+  "編程評測還不到 3 類": "Fewer than 3 coding benchmarks so far",
+  "Max 推理": "Max reasoning",
+  "目前只有一家評測機構的成績": "Results from only one evaluator so far",
+  "知識問答評測還不到 2 類": "Fewer than 2 knowledge Q&A benchmarks so far"
+ },
+ "en-meta": {
+  "updatedAt": "2026-10-18T02:36:50+00:00",
+  "windowDays": 14,
+  "coverage": {
+   "items": {
+    "have": 3,
+    "ids": 3
+   },
+   "stories": {
+    "have": 1,
+    "of": 1
+   },
+   "reports": {
+    "have": 3,
+    "of": 3
+   },
+   "names": 8,
+   "lb": {
+    "sources": 3,
+    "strings": 4
+   }
+  },
+  "usage": {
+   "day": "2026-10-18",
+   "calls": {
+    "lite": 12,
+    "gemma": 6
+   },
+   "cool": {}
+  },
+  "itemsWithoutEnglish": {
+   "P4": 0
+  },
+  "run": {
+   "done": 40,
+   "failed": 0,
+   "retried": 2,
+   "stopped": {
+    "lite": "run cap",
+    "gemma": "queue empty"
+   },
+   "failures": []
+  }
+ }
+}

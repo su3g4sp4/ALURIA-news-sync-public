@@ -3,6 +3,10 @@
 # 不怕 GitHub 排程延遲。金鑰都放在本倉庫的 Actions secrets，程式和紀錄裡沒有任何金鑰。
 # Tibo 重置監控 + AIHOT 精選／全部／熱榜／日週月報／模型榜鏡像 + Gemini 改寫（去 AI 味規則見 site/style/rewrite-guide.md），寫入 Neon。
 # 失敗時不覆蓋 → 網站沿用上一份好的資料，並開一張 issue；恢復後自動關閉。
+# 英文版（AINEWS）：鏡像抓完、中文改寫之後，scripts/english-aihot.py 用 Gemini 免費額度為條目、事件頁、日／週／月報、來源名稱與模型榜寫道地英文，
+# 寫進 en-items／en-stories／en-reports／en-names／en-lb／en-lb-text（格式見私人網站倉庫的 docs/english-keys.md）；存庫前先檢查沒有中文，檢查不過就不存這一輪的英文顯示鍵。
+# 順序：中文鍵先存（英文步驟最久 12 分鐘，不該拖慢中文）→ 英文 → 英文檢查 → 英文鍵逐一存（一個鍵被資料庫拒收不影響其他鍵）。
+# 本倉庫的執行紀錄是公開的：英文步驟只印次數、模型種類與 HTTP 狀態碼；資料庫主機名、帳號、密碼另外用 add-mask 遮住。
 name: AI熱點 sync
 
 # 2026-10-18 起定時執行搬到公開倉庫 su3g4sp4/ALURIA-news-sync-public（公開倉庫的執行分鐘數免費）；這裡只留手動執行備用。
@@ -10,18 +14,25 @@ on:
   schedule:
     - cron: "*/10 * * * *"
   workflow_dispatch:
+    inputs:
+      english_sample:
+        description: "Only try the English pass on a small built-in sample with the real Gemini free tier (no database, nothing saved, no relay) and print the result"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
   issues: write
   actions: write
 
+# 試英文樣本的那一輪另用一個群組：不跟接力線搶同一個等待位置（等待位只留一個，搶到會把接力線的下一輪擠掉）。
 concurrency:
-  group: tibo-sync
+  group: ${{ inputs.english_sample && 'tibo-sync-sample' || 'tibo-sync' }}
   cancel-in-progress: false
 
 jobs:
   gate:
+    if: ${{ !inputs.english_sample }}
     runs-on: ubuntu-latest
     timeout-minutes: 2
     outputs:
@@ -39,13 +50,28 @@ jobs:
     needs: gate
     if: needs.gate.outputs.run == 'yes'
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    # 抓取與改寫不到 3 分鐘；英文步驟最久 12 分鐘（8 分鐘後不再開新請求）。接力那一輪會等到開始後約 28 分鐘才叫下一輪，25 分鐘的同步不會讓它亂掉。
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
           sparse-checkout: |
             scripts
             site/style
+            tests/fixtures
+      - name: Mask the database host, user and password in every later log line (this repository's logs are public)
+        env: { DATABASE_URL: "${{ secrets.DATABASE_URL }}" }
+        run: |
+          python3 - <<'PY'
+          import os
+          from urllib.parse import urlparse
+          try:
+              u = urlparse(os.environ.get("DATABASE_URL", ""))
+              for x in (u.hostname, u.username, u.password):
+                  if x and len(x) >= 6: print("::add-mask::" + x)
+          except ValueError:
+              pass
+          PY
       - name: Fetch last good snapshot (Neon)
         env: { DATABASE_URL: "${{ secrets.DATABASE_URL }}" }
         run: |
@@ -108,17 +134,19 @@ jobs:
         run: |
           psql "$DATABASE_URL" -Atqc "SELECT data::text FROM aihot_mirror WHERE key = 'rewrites'" > /tmp/rewrites-prev.json || true
           python3 scripts/rewrite-aihot.py
-      - name: Save mirror to Neon (only keys fetched OK; others keep last good)
+      - name: Save mirror to Neon (the Chinese keys; the en-* keys have their own step below; only keys fetched OK, others keep last good)
         if: always() && steps.mirror.outcome != 'skipped'
         env: { DATABASE_URL: "${{ secrets.DATABASE_URL }}" }
         run: |
           [ -d data/mirror ] || exit 0
-          # 一個連線寫完所有鍵；內容沒變的不更新。
+          # 一個連線寫完所有中文鍵；內容沒變的不更新。
+          # 英文版（en-*）不在這裡存：英文步驟最久 12 分鐘，而且某個英文檔被資料庫拒收時整個交易會回滾；兩件事都不該拖慢或擋住中文資料。
           {
             echo "BEGIN;"
             echo "CREATE TABLE IF NOT EXISTS aihot_mirror (key text PRIMARY KEY, data jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now());"
             for f in data/mirror/*.json; do
               k=$(basename "$f" .json)
+              case "$k" in en-*) continue ;; esac
               echo "\\set d \`cat $f\`"
               echo "INSERT INTO aihot_mirror (key, data, updated_at) VALUES ('$k', :'d'::jsonb, now()) ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data, updated_at = now() WHERE aihot_mirror.data IS DISTINCT FROM EXCLUDED.data;"
             done
@@ -136,8 +164,75 @@ jobs:
           psql "$DATABASE_URL" -Atqc "SELECT key, data::text FROM aihot_mirror WHERE key LIKE 'lb-%'" -F $'\t' > /tmp/lb-rows.tsv
           python3 -m unittest scripts/test_check_lb_snapshot.py
           python3 scripts/check-lb-snapshot.py --rows /tmp/lb-rows.tsv
+      - name: English edition (Gemini free tier; cached by text hash; every answer is checked, Chinese output is retried then left out)
+        id: english
+        if: always() && steps.mirror.outcome != 'skipped'
+        timeout-minutes: 12
+        continue-on-error: true
+        env:
+          DATABASE_URL: "${{ secrets.DATABASE_URL }}"
+          GEMINI_API_KEY: "${{ secrets.GEMINI_API_KEY }}"
+          EN_CACHE_REQUIRED: "1"
+        run: |
+          # 上一份快取：空檔＝資料庫回答了但還沒有（第一次）；沒有檔＝資料庫讀不到，腳本這一輪什麼都不寫（免得用空快取蓋掉已有的英文）。
+          psql "$DATABASE_URL" -Atqc "SELECT data::text FROM aihot_mirror WHERE key = 'en-cache'" > /tmp/en-cache-prev.json || rm -f /tmp/en-cache-prev.json
+          python3 scripts/english-aihot.py
+      - name: Check the English keys (compile, shapes, no Chinese, no upstream name) before they are saved
+        id: encheck
+        if: always() && steps.english.outcome != 'skipped'
+        continue-on-error: true
+        run: |
+          python3 -m py_compile scripts/en_text.py scripts/english-aihot.py scripts/test_en_text.py
+          [ -s data/mirror/en-meta.json ] || echo "::warning title=English edition::the English pass wrote nothing this run (see its log); the Chinese data is saved as usual"
+          ok=1
+          python3 -m unittest scripts/test_en_text.py || ok=0
+          if [ "$ok" = 0 ]; then
+            echo "::error title=English edition::the English check failed: the six display keys of this run are not saved (Neon keeps the last good ones); en-cache and en-meta are still saved so progress and quota counts are kept"
+            rm -f data/mirror/en-items.json data/mirror/en-stories.json data/mirror/en-reports.json data/mirror/en-names.json data/mirror/en-lb.json data/mirror/en-lb-text.json
+          fi
+          # en-meta is published too: it is kept unless it holds Chinese or a character the database refuses.
+          python3 - <<'PY'
+          import json, os, sys
+          sys.path.insert(0, "scripts")
+          import en_text as T
+          p = "data/mirror/en-meta.json"
+          if os.path.exists(p):
+              try:
+                  with open(p, encoding="utf-8") as f: doc = json.load(f)
+                  unsafe = bool(T.find_cjk(doc)) or T.has_nul(doc)
+              except (OSError, ValueError):
+                  unsafe = True
+              if unsafe:
+                  os.remove(p)
+                  print("::warning title=English edition::en-meta held Chinese or an unreadable value and is not saved")
+          PY
+          [ "$ok" = 1 ]
+      - name: Save the English keys to Neon (one key at a time; a key the database refuses does not stop the others; the Chinese keys are already saved)
+        id: ensave
+        if: always() && steps.english.outcome != 'skipped'
+        continue-on-error: true
+        env: { DATABASE_URL: "${{ secrets.DATABASE_URL }}" }
+        run: |
+          shopt -s nullglob
+          # en-cache（翻譯進度與每日用量）排在最前面存，被砍掉時不會丟用量計數；內容沒變的鍵不更新。
+          # 資料庫的錯誤訊息不直接印出（公開倉庫的紀錄是公開的）：主機名換成 <db>，只留前三行。
+          DBHOST=$(printf '%s' "$DATABASE_URL" | sed -E 's#^[a-z]+://[^@]*@##; s#[:/?].*##')
+          psql "$DATABASE_URL" -q -c "CREATE TABLE IF NOT EXISTS aihot_mirror (key text PRIMARY KEY, data jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now());" 2> /tmp/psql-err.txt || { echo "::error title=English edition::could not reach Neon"; sed "s#${DBHOST:-@@none@@}#<db>#g" /tmp/psql-err.txt | head -3; exit 1; }
+          fail=0
+          for f in data/mirror/en-*.json; do
+            k=$(basename "$f" .json)
+            if ! printf '%s\n' "\\set d \`cat $f\`" "INSERT INTO aihot_mirror (key, data, updated_at) VALUES ('$k', :'d'::jsonb, now()) ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data, updated_at = now() WHERE aihot_mirror.data IS DISTINCT FROM EXCLUDED.data;" | psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q 2> /tmp/psql-err.txt; then
+              echo "::error title=English edition::could not save $k to Neon (the other keys are still saved)"
+              sed "s#${DBHOST:-@@none@@}#<db>#g" /tmp/psql-err.txt | head -3
+              fail=1
+            fi
+          done
+          exit $fail
       - name: Fail if any mirror key failed (opens the failure issue)
         if: steps.mirror.outcome == 'failure'
+        run: exit 1
+      - name: Fail if the English check or save failed (opens the failure issue; the Chinese data is already saved)
+        if: always() && (steps.encheck.outcome == 'failure' || steps.ensave.outcome == 'failure')
         run: exit 1
       - name: Close failure issue on recovery
         if: success()
@@ -149,11 +244,20 @@ jobs:
       - name: Notify failure (keep last good snapshot)
         if: failure()
         uses: actions/github-script@v7
+        env:
+          MIRROR: "${{ steps.mirror.outcome }}"
+          EN_CHECK: "${{ steps.encheck.outcome }}"
+          EN_SAVE: "${{ steps.ensave.outcome }}"
         with:
           script: |
             const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
             const { data } = await github.rest.issues.listForRepo({ ...context.repo, state: "open", labels: "tibo-sync-failure" });
-            const body = `同步失敗（Tibo 或 AIHOT 鏡像），網站沿用上一份好的資料。\n\n執行紀錄：${run}\n時間：${new Date().toISOString()}`;
+            // 說清楚是哪一段失敗：英文版（AINEWS）的檢查或存庫失敗時，中文資料已經照常存入，網站的英文沿用上一份好的。
+            const parts = [];
+            if (process.env.MIRROR === "failure") parts.push("AIHOT 鏡像");
+            if (process.env.EN_CHECK === "failure" || process.env.EN_SAVE === "failure") parts.push("英文版（AINEWS）的檢查或存庫（中文資料已照常存入）");
+            if (!parts.length) parts.push("Tibo 或 AIHOT 鏡像");
+            const body = `同步失敗：${parts.join("；")}。網站沿用上一份好的資料。\n\n執行紀錄：${run}\n時間：${new Date().toISOString()}`;
             if (data.length) {
               // 降噪：同一張 issue 最多每 6 小時留言一次。
               const last = new Date(data[0].updated_at).getTime();
@@ -165,7 +269,7 @@ jobs:
   # 在開始後約 28 分鐘自己叫下一輪（只接力 workflow_dispatch，定時那一輪不另開一條接力線）。
   next:
     needs: [gate, sync]
-    if: always() && github.event_name == 'workflow_dispatch'
+    if: always() && github.event_name == 'workflow_dispatch' && !inputs.english_sample
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env: { GH_TOKEN: "${{ github.token }}" }
@@ -177,3 +281,33 @@ jobs:
           [ "$wait" -gt 0 ] && sleep "$wait"
           gh workflow run sync.yml -R ${{ github.repository }} --ref main
 
+  # 手動勾選 english_sample 才跑：先在 Linux 上跑全部單元測試，再用真的 Gemini 免費額度在一小份內建樣本上試英文步驟（約 10 次請求），印出結果；不連資料庫、不存任何東西。
+  english-sample:
+    if: ${{ inputs.english_sample }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            scripts
+            site/style
+            tests/fixtures
+            .github/workflows
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the sample mirror and run the English pass on it
+        env:
+          GEMINI_API_KEY: "${{ secrets.GEMINI_API_KEY }}"
+          EN_MIRROR_DIR: /tmp/sample-mirror
+          EN_CACHE_PREV: /tmp/sample-cache-none.json
+          EN_NOW: "2026-10-18T03:00:00Z"
+          REWRITES_PREV: /tmp/none.json
+        run: |
+          python3 -m py_compile scripts/en_text.py scripts/english-aihot.py scripts/test_en_text.py
+          python3 -m unittest scripts/test_en_text.py
+          python3 scripts/test_en_text.py --mini-mirror /tmp/sample-mirror
+          python3 scripts/english-aihot.py
+          for k in en-items en-stories en-reports en-names en-lb en-lb-text en-meta; do echo "== $k"; cat "/tmp/sample-mirror/$k.json"; echo; done
+          python3 -m unittest scripts.test_en_text.TestGeneratedKeys

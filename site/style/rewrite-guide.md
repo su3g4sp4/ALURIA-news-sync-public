@@ -31,3 +31,12 @@
 - Plain newsroom English. Lead with who did what.
 - Banned: game-changer, revolutionary, groundbreaking, unleash, empower, delve, landscape, "in a world where", "it's worth noting", "in conclusion".
 - Sentence case for headlines. No hype, no emoji.
+
+## English edition (AINEWS): native English, not translation
+- The English edition is written for English-speaking readers in native newsroom and community English. Compose from the facts; do not translate Chinese sentence structure, word order or idioms. If a sentence would only make sense as a translation, rewrite it from scratch.
+- Same facts as the Chinese edition, never more: names, numbers, versions and dates stay exactly as in the source. Nothing is added from memory.
+- Use the terms English readers use (open weights, context window, rate limits, inference), US spelling, and plain verbs (said, released, cut, raised) over corporate ones (unveiled, leveraged, empowered).
+- Each channel has its own register:
+  - Telegram: casual-informative. Talk like a well-read member of the group: two to four short sentences, the news first, then the one detail that matters. No sign-offs, no emoji walls, no "Great question!".
+  - Reddit: conversational and value-first. The post must be worth reading even if nobody clicks the link: what happened, the concrete details, why it matters to people who use or build AI, then an honest question for the thread. No hype, no marketing tone, no brand "we", no clickbait titles; our link goes at the end, once.
+  - X: short and punchy, within 280 characters including the link (a link counts as 23). One or two plain sentences, the most concrete detail, no hashtags, no emoji, no "🚨 BREAKING".
